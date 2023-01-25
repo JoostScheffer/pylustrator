@@ -29,7 +29,8 @@ from matplotlib.artist import Artist
 from matplotlib.figure import Figure
 from matplotlib.text import Text
 from matplotlib.axes import Axes
-from qtpy import QtCore, QtWidgets, QtGui
+from matplotlib.backends.qt_compat import QtCore, QtGui, QtWidgets
+from .helper_functions import main_figure
 
 
 class Linkable:
@@ -64,14 +65,14 @@ class Linkable:
         else:
             def set(v, v_list=None):
                 if v_list is None:
-                    v = [v]+[v]*len(self.element.figure.selection.targets)
+                    v = [v]+[v]*len(main_figure(self.element).selection.targets)
                 else:
                     v = v_list
 
                 # special treatment for the xylabels, as they are not directly the target objects
                 label_object = None
-                if isinstance(self.element, Text) and isinstance(self.element.figure.selection.targets[0].target, Axes):
-                    for elm in self.element.figure.selection.targets:
+                if isinstance(self.element, Text) and len(main_figure(self.element).selection.targets) and isinstance(main_figure(self.element).selection.targets[0].target, Axes):
+                    for elm in main_figure(self.element).selection.targets:
                         elm = elm.target
                         if self.element == getattr(getattr(elm, f"get_xaxis")(), "get_label")():
                             label_object = "x"
@@ -84,7 +85,7 @@ class Linkable:
                 getattr(self.element, "set_" + property_name)(v[0])
                 elements.append(self.element)
                 index = 0
-                for elm in self.element.figure.selection.targets:
+                for elm in main_figure(self.element).selection.targets:
                     elm = elm.target
                     # special treatment for the xylabels, as they are not directly the target objects
                     if label_object is not None:
@@ -101,8 +102,8 @@ class Linkable:
 
             def getAll():
                 label_object = None
-                if isinstance(self.element, Text) and isinstance(self.element.figure.selection.targets[0].target, Axes):
-                    for elm in self.element.figure.selection.targets:
+                if isinstance(self.element, Text) and len(main_figure(self.element).selection.targets) and isinstance(main_figure(self.element).selection.targets[0].target, Axes):
+                    for elm in main_figure(self.element).selection.targets:
                         elm = elm.target
                         if self.element == getattr(getattr(elm, f"get_xaxis")(), "get_label")():
                             label_object = "x"
@@ -112,7 +113,7 @@ class Linkable:
                             break
 
                 values = [(self.element, property_name, getattr(self.element, "get_" + property_name)())]
-                for index, elm in enumerate(self.element.figure.selection.targets):
+                for index, elm in enumerate(main_figure(self.element).selection.targets):
                     elm = elm.target
                     # special treatment for the xylabels, as they are not directly the target objects
                     if label_object is not None:
@@ -151,27 +152,43 @@ class Linkable:
     def updateLink(self):
         """ update the linked property """
         old_value = self.getLinkedPropertyAll()
-        def undo():
-            for elem, property_name, value in old_value:
-                getattr(elem, "set_" + property_name, None)(value)
-        def redo():
-            for elem, property_name, value in new_value:
-                getattr(elem, "set_" + property_name, None)(value)
+
         try:
             elements = self.setLinkedProperty(self.get())
         except AttributeError:
             return
-        for element in elements:
+
+        new_value = self.getLinkedPropertyAll()
+
+        def save_change(element):
             if isinstance(element, mpl.figure.Figure):
                 fig = element
             else:
-                fig = element.figure
+                fig = main_figure(element)
 
-            fig.change_tracker.addChange(element, self.serializeLinkedProperty(self.getSerialized()))
+            if isinstance(element, Text):
+                fig.change_tracker.addNewTextChange(element)
+            else:
+                fig.change_tracker.addChange(element, self.serializeLinkedProperty(self.getSerialized()))
 
-        new_value = self.getLinkedPropertyAll()
+        def undo():
+            for elem, property_name, value in old_value:
+                getattr(elem, "set_" + property_name, None)(value)
+                save_change(elem)
+        def redo():
+            for elem, property_name, value in new_value:
+                getattr(elem, "set_" + property_name, None)(value)
+                save_change(elem)
+
+        element = elements[0]
+        if isinstance(element, mpl.figure.Figure):
+            fig = element
+        else:
+            fig = main_figure(element)
+
         fig.change_tracker.addEdit([undo, redo, "Change property"])
         fig.canvas.draw()
+        main_figure(self.element).signals.figure_selection_property_changed.emit()
 
     def set(self, value):
         """ set the value (to be overloaded) """
@@ -236,6 +253,8 @@ class FreeNumberInput(QtWidgets.QLineEdit):
 
 class DimensionsWidget(QtWidgets.QWidget, Linkable):
     valueChanged = QtCore.Signal(tuple)
+    valueChangedX = QtCore.Signal(float)
+    valueChangedY = QtCore.Signal(float)
     transform = None
     noSignal = False
 
@@ -265,7 +284,7 @@ class DimensionsWidget(QtWidgets.QWidget, Linkable):
             self.input1.setMaximum(99999)
             self.input1.setMinimum(-99999)
             self.input1.setMaximumWidth(100)
-        self.input1.valueChanged.connect(self.onValueChanged)
+        self.input1.valueChanged.connect(self.onValueChangedX)
         self.layout.addWidget(self.input1)
 
         self.text2 = QtWidgets.QLabel(join)
@@ -281,7 +300,7 @@ class DimensionsWidget(QtWidgets.QWidget, Linkable):
             self.input2.setMaximum(99999)
             self.input2.setMinimum(-99999)
             self.input2.setMaximumWidth(100)
-        self.input2.valueChanged.connect(self.onValueChanged)
+        self.input2.valueChanged.connect(self.onValueChangedY)
         self.layout.addWidget(self.input2)
 
         self.editingFinished = self.valueChanged
@@ -299,12 +318,24 @@ class DimensionsWidget(QtWidgets.QWidget, Linkable):
         """ set the transform for the units """
         self.transform = transform
 
+    def onValueChangedX(self):
+        """ called when the value was changed -> emit the value changed signal """
+        if not self.noSignal:
+            self.valueChangedX.emit(self.value()[0])
+            self.valueChanged.emit(tuple(self.value()))
+
+    def onValueChangedY(self):
+        """ called when the value was changed -> emit the value changed signal """
+        if not self.noSignal:
+            self.valueChangedY.emit(self.value()[1])
+            self.valueChanged.emit(tuple(self.value()))
+
     def onValueChanged(self):
         """ called when the value was changed -> emit the value changed signal """
         if not self.noSignal:
             self.valueChanged.emit(tuple(self.value()))
 
-    def setValue(self, values: tuple):
+    def setValue(self, values: tuple, signal=False):
         """ set the two values """
         self.noSignal = True
         if self.transform:
@@ -312,6 +343,8 @@ class DimensionsWidget(QtWidgets.QWidget, Linkable):
         self.input1.setValue(values[0])
         self.input2.setValue(values[1])
         self.noSignal = False
+        if signal is True:
+            self.onValueChanged()
 
     def value(self):
         """ get the value """
@@ -376,7 +409,7 @@ class TextWidget(QtWidgets.QWidget, Linkable):
         """ set the text of the label """
         self.label.setLabel(text)
 
-    def setText(self, text: str):
+    def setText(self, text: str, signal=False):
         """ set contents of the text input widget """
         self.noSignal = True
         text = text.replace("\n", "\\n")
@@ -386,6 +419,8 @@ class TextWidget(QtWidgets.QWidget, Linkable):
         else:
             self.input1.setText(text)
         self.noSignal = False
+        if signal is True:
+            self.editingFinished.emit()
 
     def text(self) -> str:
         """ return the text """
@@ -403,7 +438,6 @@ class TextWidget(QtWidgets.QWidget, Linkable):
     def getSerialized(self) -> str:
         """ serialize the value (used for the Linkable parent class) """
         return "\"" + str(self.get()) + "\""
-
 
 class NumberWidget(QtWidgets.QWidget, Linkable):
     editingFinished = QtCore.Signal()
@@ -444,11 +478,13 @@ class NumberWidget(QtWidgets.QWidget, Linkable):
         """ set the text label """
         self.label.setLabel(text)
 
-    def setValue(self, text: float):
+    def setValue(self, text: float, signal=False):
         """ set the value of the spin box """
         self.noSignal = True
         self.input1.setValue(text)
         self.noSignal = False
+        if signal is True:
+            self.editingFinished.emit()
 
     def value(self) -> float:
         """ get the value of the spin box """
@@ -505,12 +541,14 @@ class ComboWidget(QtWidgets.QWidget, Linkable):
         """ set the text of the label """
         self.label.setLabel(text)
 
-    def setText(self, text: str):
+    def setText(self, text: str, signal=False):
         """ set the value of the combo box """
         self.noSignal = True
         index = self.values.index(text)
         self.input1.setCurrentIndex(index)
         self.noSignal = False
+        if signal is True:
+            self.editingFinished.emit()
 
     def text(self) -> str:
         """ get the value of the combo box """
@@ -560,11 +598,14 @@ class CheckWidget(QtWidgets.QWidget, Linkable):
             self.stateChanged.emit(self.input1.isChecked())
             self.editingFinished.emit()
 
-    def setChecked(self, state: bool):
+    def setChecked(self, state: bool, signal=False):
         """ set the value of the check box """
         self.noSignal = True
         self.input1.setChecked(state)
         self.noSignal = False
+        if signal:
+            self.stateChanged.emit(self.input1.isChecked())
+            self.editingFinished.emit()
 
     def isChecked(self) -> bool:
         """ get the value of the checkbox """

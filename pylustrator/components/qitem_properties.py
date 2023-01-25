@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# QComplexWidgets.py
+# qitem_properties.py
 
 # Copyright (c) 2016-2020, Richard Gerum
 #
@@ -20,45 +20,24 @@
 # along with Pylustrator. If not, see <http://www.gnu.org/licenses/>
 
 import os
-import sys
-
-import os
-import sys
-import traceback
+from typing import Any
+import numpy as np
+from packaging import version
 
 import qtawesome as qta
-from matplotlib import _pylab_helpers
+from matplotlib.backends.qt_compat import QtCore, QtGui, QtWidgets
 
-from .ax_rasterisation import rasterizeAxes, restoreAxes
-from .change_tracker import setFigureVariableNames
-from .drag_helper import DragManager
-from .exception_swallower import swallow_get_exceptions
-from .matplotlibwidget import MatplotlibWidget
-
-import qtawesome as qta
-from matplotlib import _pylab_helpers
 from matplotlib.axes._subplots import Axes
 import matplotlib as mpl
 import matplotlib.pyplot as plt
-import matplotlib.transforms as transforms
-import numpy as np
 from matplotlib.artist import Artist
 from matplotlib.figure import Figure
-from qtpy import QtCore, QtWidgets, QtGui
-from typing import Any, Optional
+from matplotlib.ticker import AutoLocator
 
-from .change_tracker import getReference
-from .helper_functions import changeFigureSize
-from .QLinkableWidgets import QColorWidget, CheckWidget, TextWidget, RadioWidget, DimensionsWidget, NumberWidget, ComboWidget
-
-from qtpy import API_NAME as QT_API_NAME
-
-if QT_API_NAME.startswith("PyQt4"):
-    from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as Canvas
-    from matplotlib.backends.backend_qt4 import NavigationToolbar2QT as NavigationToolbar
-else:
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as Canvas
-    from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
+from pylustrator.change_tracker import getReference
+from pylustrator.QLinkableWidgets import QColorWidget, CheckWidget, TextWidget, DimensionsWidget, NumberWidget, ComboWidget
+from pylustrator.helper_functions import main_figure
+from pylustrator.change_tracker import UndoRedo, add_text_default
 
 
 class TextPropertiesWidget(QtWidgets.QWidget):
@@ -112,10 +91,10 @@ class TextPropertiesWidget(QtWidgets.QWidget):
         self.layout.addWidget(self.label)
         self.label.clicked.connect(self.selectFont)
 
-        self.button_delete = QtWidgets.QPushButton(qta.icon("fa5s.trash"), "")
-        self.button_delete.clicked.connect(self.delete)
-        self.button_delete.setToolTip("delete")
-        self.layout.addWidget(self.button_delete)
+        #self.button_delete = QtWidgets.QPushButton(qta.icon("fa5s.trash"), "")
+        #self.button_delete.clicked.connect(self.delete)
+        #self.button_delete.setToolTip("delete")
+        #self.layout.addWidget(self.button_delete)
 
     def convertMplWeightToQtWeight(self, weight: str) -> int:
         """ convert a font weight string to a weight enumeration of Qt """
@@ -142,25 +121,16 @@ class TextPropertiesWidget(QtWidgets.QWidget):
         font0.setPointSizeF(int(self.target.get_fontsize()))
         font, x = QtWidgets.QFontDialog.getFont(font0, self)
 
-        for element in self.target_list:
-            element.set_fontname(font.family())
-            element.figure.change_tracker.addChange(element, ".set_fontname(\"%s\")" % (element.get_fontname(),))
+        with UndoRedo(self.target_list, "Change font size"):
+            for element in self.target_list:
+                element.set_fontname(font.family())
+                if font.weight() != font0.weight():
+                    element.set_weight(self.convertQtWeightToMplWeight(font.weight()))
+                if font.pointSizeF() != font0.pointSizeF():
+                    element.set_fontsize(font.pointSizeF())
+                if font.italic() != font0.italic():
+                    element.set_style("italic" if font.italic() else "normal")
 
-            if font.weight() != font0.weight():
-                weight = self.convertQtWeightToMplWeight(font.weight())
-                element.set_weight(weight)
-                element.figure.change_tracker.addChange(element, ".set_weight(\"%s\")" % (weight,))
-
-            if font.pointSizeF() != font0.pointSizeF():
-                element.set_fontsize(font.pointSizeF())
-                element.figure.change_tracker.addChange(element, ".set_fontsize(%f)" % (font.pointSizeF(),))
-
-            if font.italic() != font0.italic():
-                style = "italic" if font.italic() else "normal"
-                element.set_style(style)
-                element.figure.change_tracker.addChange(element, ".set_style(\"%s\")" % (style,))
-
-        self.target.figure.canvas.draw()
         self.setTarget(self.target_list)
 
     def setTarget(self, element: Artist):
@@ -189,7 +159,7 @@ class TextPropertiesWidget(QtWidgets.QWidget):
     def delete(self):
         """ delete the target text """
         if self.target is not None:
-            fig = self.target.figure
+            fig = main_figure(self.target)
             fig.change_tracker.removeElement(self.target)
             self.target = None
             # self.target.set_visible(False)
@@ -198,67 +168,38 @@ class TextPropertiesWidget(QtWidgets.QWidget):
     def changeWeight(self, checked: bool):
         """ set bold or normal """
         if self.target:
-            element = self.target
-            self.target = None
-
-            for element in self.target_list:
-                element.set_weight("bold" if checked else "normal")
-                element.figure.change_tracker.addChange(element,
-                                                        ".set_weight(\"%s\")" % ("bold" if checked else "normal",))
-
-            self.target = element
-            self.target.figure.canvas.draw()
+            with UndoRedo(self.target_list, "Change weight"):
+                for element in self.target_list:
+                    element.set_weight("bold" if checked else "normal")
 
     def changeStyle(self, checked: bool):
         """ set italic or normal """
         if self.target:
-            element = self.target
-            self.target = None
-
-            for element in self.target_list:
-                element.set_style("italic" if checked else "normal")
-                element.figure.change_tracker.addChange(element,
-                                                        ".set_style(\"%s\")" % ("italic" if checked else "normal",))
-
-            self.target = element
-            self.target.figure.canvas.draw()
+            with UndoRedo(self.target_list, "Change style"):
+                for element in self.target_list:
+                    element.set_style("italic" if checked else "normal")
 
     def changeColor(self, color: str):
         """ set the text color """
         if self.target:
-            element = self.target
-            self.target = None
-
-            for element in self.target_list:
-                element.set_color(color)
-                element.figure.change_tracker.addChange(element, ".set_color(\"%s\")" % (color,))
-
-            self.target = element
-            self.target.figure.canvas.draw()
+            with UndoRedo(self.target_list, "Change color"):
+                for element in self.target_list:
+                    element.set_color(color)
 
     def changeAlign(self, align: str):
         """ set the text algin """
         if self.target:
-            element = self.target
-            self.target = None
-
-            for element in self.target_list:
-                index_selected = self.align_names.index(align)
-                for index, button in enumerate(self.buttons_align):
-                    button.setChecked(index == index_selected)
-                element.set_ha(align)
-                element.figure.change_tracker.addChange(element, ".set_ha(\"%s\")" % align)
-
-            self.target = element
-            self.target.figure.canvas.draw()
+            with UndoRedo(self.target_list, "Change alignment"):
+                for element in self.target_list:
+                    element.set_ha(align)
 
     def changeFontSize(self, value: int):
         """ set the font size """
         if self.target:
-            for element in self.target_list:
-                element.set_fontsize(value)
-                element.figure.change_tracker.addChange(element, ".set_fontsize(%d)" % value)
-            self.target.figure.canvas.draw()
+            with UndoRedo(self.target_list, "Change font size"):
+                for element in self.target_list:
+                    element.set_fontsize(value)
+
 
 class TextPropertiesWidget2(QtWidgets.QWidget):
     stateChanged = QtCore.Signal(int, str)
@@ -321,6 +262,7 @@ class TextPropertiesWidget2(QtWidgets.QWidget):
         ]
 
         self.properties = {}
+        self.propertiesChanged.connect(lambda: self.target and main_figure(self.target).signals.figure_selection_property_changed.emit())
 
     def convertMplWeightToQtWeight(self, weight: str) -> int:
         """ convert a font weight string to a weight enumeration of Qt """
@@ -357,42 +299,45 @@ class TextPropertiesWidget2(QtWidgets.QWidget):
             self.properties["fontstyle"] = style
 
         self.propertiesChanged.emit()
-        #self.target.figure.canvas.draw()
+        #main_figure(self.target).canvas.draw()
         self.setTarget(self.target_list)
 
     def setTarget(self, element: Artist):
         """ set the target artist for this widget """
-        if len(element) == 0:
-            return
-        if isinstance(element, list):
-            self.target_list = element
-            element = element[0]
-        else:
-            if element is None:
-                self.target_list = []
+        self.noSignal = True
+        try:
+            if len(element) == 0:
+                return
+            if isinstance(element, list):
+                self.target_list = element
+                element = element[0]
             else:
-                self.target_list = [element]
-        self.target = None
-        self.font_size.setValue(int(element.get_fontsize()))
+                if element is None:
+                    self.target_list = []
+                else:
+                    self.target_list = [element]
+            self.target = None
+            self.font_size.setValue(int(element.get_fontsize()))
+            index_selected = self.align_names.index(element.get_ha())
+            for index, button in enumerate(self.buttons_align):
+                button.setChecked(index == index_selected)
 
-        index_selected = self.align_names.index(element.get_ha())
-        for index, button in enumerate(self.buttons_align):
-            button.setChecked(index == index_selected)
+            self.button_bold.setChecked(element.get_weight() == "bold")
+            self.button_italic.setChecked(element.get_style() == "italic")
+            self.button_color.setColor(element.get_color())
 
-        self.button_bold.setChecked(element.get_weight() == "bold")
-        self.button_italic.setChecked(element.get_style() == "italic")
-        self.button_color.setColor(element.get_color())
+            for name, name2, type_, default_ in self.property_names:
+                value = getattr(element, "get_"+name2)()
+                self.properties[name] = value
 
-        for name, name2, type_, default_ in self.property_names:
-            value = getattr(element, "get_"+name2)()
-            self.properties[name] = value
-
-        self.target = element
+            self.target = element
+        finally:
+            self.noSignal = False
 
     def delete(self):
         """ delete the target text """
         if self.target is not None:
-            fig = self.target.figure
+            fig = main_figure(self.target)
             fig.change_tracker.removeElement(self.target)
             self.target = None
             # self.target.set_visible(False)
@@ -420,8 +365,11 @@ class TextPropertiesWidget2(QtWidgets.QWidget):
 
     def changeFontSize(self, value: int):
         """ set the font size """
+        if self.noSignal:
+            return
         self.properties["fontsize"] = value
         self.propertiesChanged.emit()
+
 
 class LegendPropertiesWidget(QtWidgets.QWidget):
     stateChanged = QtCore.Signal(int, str)
@@ -439,23 +387,29 @@ class LegendPropertiesWidget(QtWidgets.QWidget):
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
 
+        from packaging import version
+        import matplotlib as mpl
+        ncols_name = "ncols"
+        if version.parse(mpl._get_version()) < version.parse("3.6.0"):
+            ncols_name = "ncol"
+
         self.property_names = [
-            ("frameon", "frameon", bool, None),
-            ("borderpad", "borderpad", float, None),
-            ("labelspacing", "labelspacing", float, None),
-            ("handlelength", "handlelength", float, None),
-            ("handletextpad", "handletextpad", float, None),
-            ("columnspacing", "columnspacing", float, None),
-            ("markerscale", "markerscale", float, None),
-            ("ncol", "_ncol", int, 1),
-            ("title", "title", str, ""),
-            ("fontsize", "_fontsize", int, None),
-            ("title_fontsize", "title_fontsize", int, None),
+            ("frameon", "frameon", bool, None, None),
+            ("borderpad", "borderpad", float, None, "legend_icon_borderpad.png"),
+            ("labelspacing", "labelspacing", float, None, "legend_icon_labelspacing.png"),
+            ("markerscale", "markerscale", float, None, "legend_icon_markerscale.png"),
+            ("handlelength", "handlelength", float, None, "legend_icon_handlelength.png"),
+            ("handletextpad", "handletextpad", float, None, "legend_icon_handletextpad.png"),
+            (ncols_name, "_" + ncols_name, int, 1, None),
+            ("columnspacing", "columnspacing", float, None, "legend_icon_columnspacing.png"),
+            ("fontsize", "_fontsize", int, None, "legend_icon_fontsize.png"),
+            ("title", "title", str, "", None),
+            ("title_fontsize", "title_fontsize", int, None, "legend_icon_title_fontsize.png"),
         ]
         self.properties = {}
 
         self.widgets = {}
-        for index, (name, name2, type_, default_) in enumerate(self.property_names):
+        for index, (name, name2, type_, default_, icon) in enumerate(self.property_names):
             if index % 3 == 0:
                 layout = QtWidgets.QHBoxLayout()
                 layout.setContentsMargins(0, 0, 0, 0)
@@ -476,8 +430,18 @@ class LegendPropertiesWidget(QtWidgets.QWidget):
                     widget.setSingleStep(0.1)
                 elif type_ == int:
                     widget = QtWidgets.QSpinBox()
+                widget.label = label
                 layout.addWidget(widget)
                 widget.valueChanged.connect(lambda x, name=name: self.changePropertiy(name, x))
+
+            if icon is not None and getattr(widget, "label", None):
+                from pathlib import Path
+                pix = QtGui.QPixmap(str(Path(__file__).parent.parent / "icons" / icon))
+                pix = pix.scaledToWidth(int(28*QtGui.QGuiApplication.primaryScreen().logicalDotsPerInch()/96), QtCore.Qt.SmoothTransformation)
+                widget.setToolTip(name)
+                widget.label.setToolTip(name)
+                widget.label.setPixmap(pix)
+                widget.label.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
             self.widgets[name] = widget
 
     def changePropertiy(self, name: str, value: Any):
@@ -485,30 +449,32 @@ class LegendPropertiesWidget(QtWidgets.QWidget):
         if self.target is None:
             return
 
-        bbox = self.target.get_frame().get_bbox()
+        old_properties = self.properties.copy()
         self.properties[name] = value
-        axes = self.target.axes
-        axes.legend(**self.properties)
-        self.target = axes.get_legend()
-        fig = self.target.figure
-        prop_copy = {}
-        for index, (name, name2, type_, default_) in enumerate(self.property_names):
-            value = self.properties[name]
-            if default_ is not None and value == default_:
-                continue
-            if default_ is None and value == plt.rcParams["legend." + name]:
-                continue
-            if type_ == str:
-                prop_copy[name] = '"' + value + '"'
-            else:
-                prop_copy[name] = value
-        fig.change_tracker.addChange(axes, ".legend(%s)" % (", ".join("%s=%s" % (k, v) for k, v in prop_copy.items())))
-        self.target._set_loc(tuple(self.target.axes.transAxes.inverted().transform(tuple([bbox.x0, bbox.y0]))))
-        fig.figure_dragger.make_dragable(self.target)
-        fig.figure_dragger.select_element(self.target)
-        fig.canvas.draw()
-        fig.selection.update_selection_rectangles()
-        fig.canvas.draw()
+        new_properties = self.properties.copy()
+        target = self.target
+        def setProperties(properties):
+            nonlocal target
+            bbox = target.get_frame().get_bbox()
+            axes = target.axes
+            axes.legend(**properties)
+            target = axes.get_legend()
+            fig = main_figure(target)
+            target._set_loc(tuple(target.axes.transAxes.inverted().transform(tuple([bbox.x0, bbox.y0]))))
+            fig.change_tracker.addNewLegendChange(target)
+            fig.figure_dragger.make_dragable(target)
+            fig.figure_dragger.select_element(target)
+            fig.canvas.draw()
+            fig.selection.update_selection_rectangles()
+
+        def undo():
+            setProperties(old_properties)
+
+        def redo():
+            setProperties(new_properties)
+
+        redo()
+        main_figure(target).change_tracker.addEdit([undo, redo, f"Legend {name}"])
 
     def setTarget(self, element: Artist):
         """ set the target artist for this widget """
@@ -521,7 +487,7 @@ class LegendPropertiesWidget(QtWidgets.QWidget):
             else:
                 self.target_list = [element]
         self.target = None
-        for name, name2, type_, default_ in self.property_names:
+        for name, name2, type_, default_, icon in self.property_names:
             if name2 == "frameon":
                 value = element.get_frame_on()
             elif name2 == "title":
@@ -553,7 +519,7 @@ class QTickEdit(QtWidgets.QWidget):
         """
         QtWidgets.QWidget.__init__(self)
         self.setWindowTitle("Figure - " + axis + "-Axis - Ticks - Pylustrator")
-        self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "ticks.ico")))
+        self.setWindowIcon(QtGui.QIcon(os.path.join(os.path.dirname(__file__), "../icons", "ticks.ico")))
         self.layout = QtWidgets.QVBoxLayout(self)
         self.axis = axis
 
@@ -571,7 +537,8 @@ class QTickEdit(QtWidgets.QWidget):
         self.input_ticks2.editingFinished.connect(self.ticksChanged2)
 
         self.input_scale = ComboWidget(self.layout, axis + "-Scale", ["linear", "log", "symlog", "logit"])
-        self.input_scale.link(axis + "scale", signal_target_changed)
+        self.input_scale.editingFinished.connect(self.scaleChanged)
+        #self.input_scale.link(axis + "scale", signal_target_changed)
 
         self.input_font = TextPropertiesWidget2(self.layout)
         self.input_font.propertiesChanged.connect(self.fontStateChanged)
@@ -594,8 +561,14 @@ class QTickEdit(QtWidgets.QWidget):
                 number = float(factor) * float(base) ** float(exponent)
                 line = "%s x %s^%s" % (factor, base, exponent)
             else:
-                number = float(base) ** float(exponent)
-                line = "%s^%s" % (base, exponent)
+                try:
+                    number = float(base) ** float(exponent)
+                    line = "%s^%s" % (base, exponent)
+                except ValueError:
+                    try:
+                        number = float(line)
+                    except ValueError:
+                        number = np.nan
         else:
             try:
                 number = float(line)
@@ -639,9 +612,11 @@ class QTickEdit(QtWidgets.QWidget):
     def setTarget(self, element: Artist):
         """ set the target Artist for this widget"""
         self.element = element
-        self.fig = element.figure
+        self.fig = main_figure(element)
         min, max = getattr(self.element, "get_" + self.axis + "lim")()
         self.range = [min, max]
+
+        self.input_scale.setText(getattr(self.element, "get_" + self.axis + "scale")())
 
         ticks = getattr(self.element, "get_" + self.axis + "ticks")()
         labels = getattr(self.element, "get_" + self.axis + "ticklabels")()
@@ -676,7 +651,7 @@ class QTickEdit(QtWidgets.QWidget):
         self.input_ticks2.setText(",<br>".join(text))
 
         elements = [self.element]
-        elements += [element.target for element in self.element.figure.selection.targets if
+        elements += [element.target for element in main_figure(self.element).selection.targets if
                      element.target != self.element and isinstance(element.target, Axes)]
         ticks = []
         for element in elements:
@@ -720,9 +695,26 @@ class QTickEdit(QtWidgets.QWidget):
         ticks, labels = self.parseTicks(self.input_ticks2.text())
 
         elements = [self.element]
-        elements += [element.target for element in self.element.figure.selection.targets if
+        elements += [element.target for element in main_figure(self.element).selection.targets if
                      element.target != self.element and isinstance(element.target, Axes)]
 
+        changed = False
+        for elem in elements:
+            current_ticks = getattr(elem, "get_" + self.axis + "ticks")(minor=True)
+            current_ticklabels = [t.get_text() for t in getattr(elem, "get_" + self.axis + "ticklabels")(minor=True)]
+            if len(current_ticks) != len(ticks) or (current_ticks != ticks).any() or \
+                    len(current_ticklabels) != len(labels) or current_ticklabels != labels:
+                changed = True
+        if changed is False:
+            return
+
+        with UndoRedo(elements, "Axes Minor Ticks"):
+            for element in elements:
+                getattr(element, "set_" + self.axis + "lim")(self.range)
+                getattr(element, "set_" + self.axis + "ticks")(ticks, minor=True)
+                getattr(element, "set_" + self.axis + "ticklabels")(labels, minor=True)
+
+        return
         for element in elements:
             getattr(element, "set_" + self.axis + "lim")(self.range)
             getattr(element, "set_" + self.axis + "ticks")(ticks, minor=True)
@@ -738,11 +730,10 @@ class QTickEdit(QtWidgets.QWidget):
 
             # self.setTarget(element)
             self.fig.change_tracker.addChange(element,
-                                              ".set_" + self.axis + "ticks([%s], minor=True)" % ", ".join(
-                                                  self.str(t) for t in ticks), element,
-                                              ".set_" + self.axis + "ticks_minor")
-            self.fig.change_tracker.addChange(element, ".set_" + self.axis + "ticklabels([%s], minor=True)" % ", ".join(
-                '"' + l + '"' for l in labels), element, ".set_" + self.axis + "labels_minor")
+                                              ".set_" + self.axis + "ticks([%s], [%s], minor=True)" % (
+                                                  ", ".join(self.str(t) for t in ticks),
+                                                  ", ".join('"' + l + '"' for l in labels)),
+                                              element, ".set_" + self.axis + "ticks_minor")
         self.fig.canvas.draw()
 
     def getFontProperties(self):
@@ -767,33 +758,107 @@ class QTickEdit(QtWidgets.QWidget):
         self.ticksChanged()
         #fig.change_tracker.addChange(axes, ".legend(%s)" % (", ".join("%s=%s" % (k, v) for k, v in prop_copy.items())))
 
+    def scaleChanged(self):
+        """ when the scale changed """
+        elements = [self.element]
+        elements += [element.target for element in main_figure(self.element).selection.targets if
+                     element.target != self.element and isinstance(element.target, Axes)]
+
+        with UndoRedo(elements, "Axes Scale"):
+            for element in elements:
+                kwargs = {}
+                kwargs[f"{self.axis}scale"] = self.input_scale.text()
+                element.set(**kwargs)
 
     def ticksChanged(self):
         """ when the major ticks changed """
         ticks, labels = self.parseTicks(self.input_ticks.text())
 
         elements = [self.element]
-        elements += [element.target for element in self.element.figure.selection.targets if
+        elements += [element.target for element in main_figure(self.element).selection.targets if
                      element.target != self.element and isinstance(element.target, Axes)]
 
-        for element in elements:
+        changed = False
+        for elem in elements:
+            current_ticks = getattr(elem, "get_" + self.axis + "ticks")()
+            current_ticklabels = [t.get_text() for t in getattr(elem, "get_" + self.axis + "ticklabels")()]
+            if len(current_ticks) != len(ticks) or (current_ticks != ticks).any() or \
+                len(current_ticklabels) != len(labels) or current_ticklabels != labels:
+                changed = True
+        if changed is False:
+            return
+
+        with UndoRedo(elements, "Axes Ticks"):
+            for element in elements:
+                kwargs = {}
+                kwargs[f"{self.axis}ticks"] = ticks
+                kwargs[f"{self.axis}ticklabels"] = labels
+                kwargs[f"{self.axis}lim"] = self.range
+                element.set(**kwargs)
+
+        return
+        if 0:
             getattr(element, "set_" + self.axis + "lim")(self.range)
             getattr(element, "set_" + self.axis + "ticks")(ticks)
             getattr(element, "set_" + self.axis + "ticklabels")(labels, **self.getFontProperties()[1])
-            min, max = getattr(element, "get_" + self.axis + "lim")()
-            if min != self.range[0] or max != self.range[1]:
-                self.fig.change_tracker.addChange(element,
-                                                  ".set_" + self.axis + "lim(%s, %s)" % (str(min), str(max)))
-            else:
-                self.fig.change_tracker.addChange(element,
-                                                  ".set_" + self.axis + "lim(%s, %s)" % (
-                                                  str(self.range[0]), str(self.range[1])))
 
-            # self.setTarget(self.element)
-            self.fig.change_tracker.addChange(element, ".set_" + self.axis + "ticks([%s])" % ", ".join(
-                self.str(t) for t in ticks))
-            self.fig.change_tracker.addChange(element, ".set_" + self.axis + "ticklabels([%s], %s)" % (", ".join(
-                '"' + l + '"' for l in labels), self.getFontProperties()[0]))
+        changed = False
+        for elem in elements:
+            current_ticks = getattr(elem, "get_" + self.axis + "ticks")()
+            if len(current_ticks) != len(ticks) or (current_ticks != ticks).any():
+                changed = True
+        if changed is False:
+            return
+
+        fig = self.fig
+        old_properties = []
+        for element in elements:
+            axis = getattr(element, "get_" + self.axis + "axis")()
+            locator = axis.major.locator
+            formatter = axis.major.formatter
+            lim = getattr(element, "get_" + self.axis + "lim")()
+            ticks2 = getattr(element, "get_" + self.axis + "ticks")()
+            ticklabels = [t.get_text() for t in getattr(element, "get_" + self.axis + "ticklabels")()]
+            old_properties.append([locator, formatter, lim, ticks2, ticklabels])
+
+        def undo():
+            for element, (locator, formator, lim, ticks, labels) in zip(elements, old_properties):
+                axis = getattr(element, "get_" + self.axis + "axis")()
+                axis.set_major_locator(locator)
+                axis.set_major_formatter(formator)
+                getattr(element, "set_" + self.axis + "lim")(lim)
+                if isinstance(locator, AutoLocator):
+                    # make sure there are no old changes to this element
+                    keys = [k for k in fig.change_tracker.changes]
+                    for reference_obj, reference_command in keys:
+                        if reference_obj == element and reference_command == ".set_" + self.axis + "ticks":
+                            del fig.change_tracker.changes[reference_obj, reference_command]
+                else:
+                    self.fig.change_tracker.addChange(element,
+                                                      ".set_" + self.axis + "ticks([%s], [%s], %s)" % (", ".join(
+                                                          self.str(t) for t in ticks), ", ".join(
+                                                          '"' + l + '"' for l in labels), self.getFontProperties()[0]))
+
+        def redo():
+            for element in elements:
+                getattr(element, "set_" + self.axis + "lim")(self.range)
+                getattr(element, "set_" + self.axis + "ticks")(ticks)
+                getattr(element, "set_" + self.axis + "ticklabels")(labels, **self.getFontProperties()[1])
+                min, max = getattr(element, "get_" + self.axis + "lim")()
+                if min != self.range[0] or max != self.range[1]:
+                    self.fig.change_tracker.addChange(element,
+                                                      ".set_" + self.axis + "lim(%s, %s)" % (str(min), str(max)))
+                else:
+                    self.fig.change_tracker.addChange(element,
+                                                      ".set_" + self.axis + "lim(%s, %s)" % (
+                                                      str(self.range[0]), str(self.range[1])))
+
+                # self.setTarget(self.element)
+                self.fig.change_tracker.addChange(element, ".set_" + self.axis + "ticks([%s], [%s], %s)" % (", ".join(
+                    self.str(t) for t in ticks), ", ".join('"' + l + '"' for l in labels), self.getFontProperties()[0]))
+
+        self.fig.change_tracker.addEdit([undo, redo, "ticks"])
+        redo()
         self.fig.canvas.draw()
 
 
@@ -830,9 +895,12 @@ class QAxesProperties(QtWidgets.QWidget):
 
         self.input_lim = DimensionsWidget(self.layout, axis + "-Lim:", "-", "", free=True)
         self.input_lim.link(axis + "lim", signal=self.targetChanged)
-
-        self.button_ticks = QtWidgets.QPushButton(
-            QtGui.QIcon(os.path.join(os.path.dirname(__file__), "icons", "ticks.ico")), "")
+        if axis == "x":
+            self.button_ticks = QtWidgets.QPushButton(
+                QtGui.QIcon(os.path.join(os.path.dirname(__file__), "../icons", "ticks.ico")), "")
+        else:
+            self.button_ticks = QtWidgets.QPushButton(
+                QtGui.QIcon(os.path.join(os.path.dirname(__file__), "../icons", "ticks_y.ico")), "")
         self.button_ticks.clicked.connect(self.showTickWidget)
         self.layout.addWidget(self.button_ticks)
 
@@ -853,211 +921,83 @@ class QAxesProperties(QtWidgets.QWidget):
             self.hide()
 
 
-class QPosAndSize(QtWidgets.QWidget):
-    element = None
-    transform = None
-    transform_index = 0
-    scale_type = 0
+class QAxesProperties(QtWidgets.QWidget):
+    targetChanged_wrapped = QtCore.Signal(object)
 
-    def __init__(self, layout: QtWidgets.QLayout, fig: Figure, parent: QtWidgets.QWidget):
-        """ a widget that holds all the properties to set and the tree view
+    def __init__(self, layout: QtWidgets.QLayout, axis: str, signal_target_changed: QtCore.Signal):
+        """ a widget to change the properties of an axes (label, limits)
 
         Args:
-            layout: the layout to which to add the widget
-            fig: the figure
-            tree: the tree view of the elements of the figure
-            parent: the parent widget
+            layout: the layout to which to add this widget
+            axis: whether to use "x" or the "y" axis
+            signal_target_changed: the signal when a target changed
         """
         QtWidgets.QWidget.__init__(self)
         layout.addWidget(self)
+        self.axis = axis
         self.layout = QtWidgets.QHBoxLayout(self)
-        self.layout.setContentsMargins(10, 0, 10, 0)
-        #self.tree = tree
-        self.parent = parent
+        self.layout.setContentsMargins(0, 0, 0, 0)
 
-        #self.label = QtWidgets.QLabel()
-        #self.layout.addWidget(self.label)
+        self.targetChanged = signal_target_changed
+        self.targetChanged.connect(self.setTarget)
 
-        self.input_position = DimensionsWidget(self.layout, "X:", "Y:", "cm")
-        self.input_position.valueChanged.connect(self.changePos)
-
-        self.input_shape = DimensionsWidget(self.layout, "W:", "H:", "cm")
-        self.input_shape.valueChanged.connect(self.changeSize)
-
-        self.input_transform = ComboWidget(self.layout, "", ["cm", "in", "px", "none"])
-        self.input_transform.editingFinished.connect(self.changeTransform)
-
-        self.input_shape_transform = ComboWidget(self.layout, "", ["scale", "bottom right", "top left"])
-        self.input_shape_transform.editingFinished.connect(self.changeTransform2)
-
-        self.fig = fig
-
-        self.layout.addStretch()
-
-    def changeTransform(self):#, transform_index: int, name: str):
-        """ change the tranform and the units of the position and size widgets """
-        name = self.input_transform.text()
-        self.transform_index = ["cm", "in", "px", "none"].index(name)#transform_index
-        if name == "none":
-            name = ""
-        self.input_shape.setUnit(name)
-        self.input_position.setUnit(name)
-        self.setElement(self.element)
-
-    def changeTransform2(self):#, state: int, name: str):
-        """ when the dimension change type is changed from 'scale' to 'bottom right' or 'bottom left' """
-        name = self.input_shape_transform.text()
-        self.scale_type = ["scale", "bottom right", "top left"].index(name)
-        #self.scale_type = state
-
-    def changePos(self, value: list):
-        """ change the position of an axes """
-        pos = self.element.get_position()
-        try:
-            w, h = pos.width, pos.height
-            pos.x0 = value[0]
-            pos.y0 = value[1]
-            pos.x1 = value[0] + w
-            pos.y1 = value[1] + h
-
-            self.fig.change_tracker.addChange(self.element, ".set_position([%f, %f, %f, %f])" % (
-            pos.x0, pos.y0, pos.width, pos.height))
-        except AttributeError:
-            pos = value
-
-            self.fig.change_tracker.addChange(self.element, ".set_position([%f, %f])" % (pos[0], pos[1]))
-        self.element.set_position(pos)
-        self.fig.canvas.draw()
-
-    def changeSize(self, value: list):
-        """ change the size of an axes or figure """
-        if isinstance(self.element, Figure):
-
-            if self.scale_type == 0:
-                self.fig.set_size_inches(value)
-                self.fig.change_tracker.addChange(self.element, ".set_size_inches(%f/2.54, %f/2.54, forward=True)" % (
-                value[0] * 2.54, value[1] * 2.54))
-            else:
-                if self.scale_type == 1:
-                    changeFigureSize(value[0], value[1], fig=self.fig)
-                elif self.scale_type == 2:
-                    changeFigureSize(value[0], value[1], cut_from_top=True, cut_from_left=True, fig=self.fig)
-                self.fig.change_tracker.addChange(self.element, ".set_size_inches(%f/2.54, %f/2.54, forward=True)" % (
-                value[0] * 2.54, value[1] * 2.54))
-                for axes in self.fig.axes:
-                    pos = axes.get_position()
-                    self.fig.change_tracker.addChange(axes, ".set_position([%f, %f, %f, %f])" % (
-                    pos.x0, pos.y0, pos.width, pos.height))
-                for text in self.fig.texts:
-                    pos = text.get_position()
-                    self.fig.change_tracker.addChange(text, ".set_position([%f, %f])" % (pos[0], pos[1]))
-
-            self.fig.selection.update_selection_rectangles()
-            self.fig.canvas.draw()
-            self.fig.widget.updateGeometry()
-            self.parent.updateFigureSize()
-            self.parent.updateRuler()
+        self.input_label = TextWidget(self.layout, axis + "-Label:")
+        self.input_label.editingFinished.connect(self.saveLabel)
+        self.input_lim = DimensionsWidget(self.layout, axis + "-Lim:", "-", "", free=True)
+        self.input_lim.editingFinished.connect(self.saveLim)
+        if axis == "x":
+            self.button_ticks = QtWidgets.QPushButton(
+                QtGui.QIcon(os.path.join(os.path.dirname(__file__), "../icons", "ticks.ico")), "")
         else:
-            elements = [self.element]
-            elements += [element.target for element in self.element.figure.selection.targets if
-                         element.target != self.element and isinstance(element.target, Axes)]
-            print("elements", elements)
-            old_positions = []
-            new_positions = []
-            for element in elements:
-                pos = element.get_position()
-                old_positions.append(pos)
-                pos = [pos.x0, pos.y0, pos.width, pos.height]
-                pos[2] = value[0]
-                pos[3] = value[1]
-                new_positions.append(pos)
+            self.button_ticks = QtWidgets.QPushButton(
+                QtGui.QIcon(os.path.join(os.path.dirname(__file__), "../icons", "ticks_y.ico")), "")
+        self.button_ticks.clicked.connect(self.showTickWidget)
+        self.layout.addWidget(self.button_ticks)
 
-            fig = self.fig
+        self.tick_edit = QTickEdit(axis, signal_target_changed)
 
-            def redo():
-                for element, pos in zip(elements, new_positions):
-                    element.set_position(pos)
-                    fig.change_tracker.addChange(element, ".set_position([%f, %f, %f, %f])" % tuple(pos))
+    def showTickWidget(self):
+        """ open the tick edit dialog """
+        self.tick_edit.setTarget(self.element)
+        self.tick_edit.show()
 
-            def undo():
-                for element, pos in zip(elements, new_positions):
-                    element.set_position(pos)
-                    fig.change_tracker.addChange(element, ".set_position([%f, %f, %f, %f])" % tuple(pos))
-
-            redo()
-            self.fig.change_tracker.addEdit([undo, redo, "Change size"])
-            self.fig.selection.update_selection_rectangles()
-            self.fig.canvas.draw()
-
-
-    def getTransform(self, element: Artist) -> Optional[mpl.transforms.Transform]:
-        """ get the transform of an Artist """
-        if isinstance(element, Figure):
-            if self.transform_index == 0:
-                return transforms.Affine2D().scale(2.54, 2.54)
-            return None
-        if isinstance(element, Axes):
-            if self.transform_index == 0:
-                return transforms.Affine2D().scale(2.54,
-                                                   2.54) + element.figure.dpi_scale_trans.inverted() + element.figure.transFigure
-            if self.transform_index == 1:
-                return element.figure.dpi_scale_trans.inverted() + element.figure.transFigure
-            if self.transform_index == 2:
-                return element.figure.transFigure
-            return None
-        if self.transform_index == 0:
-            return transforms.Affine2D().scale(2.54,
-                                               2.54) + element.figure.dpi_scale_trans.inverted() + element.get_transform()
-        if self.transform_index == 1:
-            return element.figure.dpi_scale_trans.inverted() + element.get_transform()
-        if self.transform_index == 2:
-            return element.get_transform()
-        return None
-
-    def setElement(self, element: Artist):
+    def setTarget(self, element: Artist):
         """ set the target Artist of this widget """
-        #self.label.setText(str(element))
         self.element = element
 
-        self.input_shape_transform.setDisabled(True)
-        self.input_transform.setDisabled(True)
-
-        if isinstance(element, Figure):
-            pos = element.get_size_inches()
-            self.input_shape.setTransform(self.getTransform(element))
-            self.input_shape.setValue((pos[0], pos[1]))
-            self.input_shape.setEnabled(True)
-            self.input_transform.setEnabled(True)
-            self.input_shape_transform.setEnabled(True)
-        elif isinstance(element, Axes):
-            pos = element.get_position()
-            self.input_shape.setTransform(self.getTransform(element))
-            self.input_shape.setValue((pos.width, pos.height))
-            self.input_transform.setEnabled(True)
-            self.input_shape.setEnabled(True)
-
+        if isinstance(element, Axes):
+            self.input_label.setText(getattr(element, f"get_{self.axis}label")())
+            self.input_lim.setValue(getattr(element, f"get_{self.axis}lim")())
+            self.show()
         else:
-            self.input_shape.setDisabled(True)
+            self.hide()
 
-        try:
-            pos = element.get_position()
-            self.input_position.setTransform(self.getTransform(element))
-            try:
-                self.input_position.setValue(pos)
-            except Exception as err:
-                self.input_position.setValue((pos.x0, pos.y0))
-            self.input_transform.setEnabled(True)
-            self.input_position.setEnabled(True)
-        except:
-            self.input_position.setDisabled(True)
+    def saveLabel(self):
+        elements = [self.element]
+        elements += [element.target for element in main_figure(self.element).selection.targets if
+                     element.target != self.element and isinstance(element.target, Axes)]
 
+        text = self.input_label.text()
+        with UndoRedo(elements, f"Set axes {self.axis}-label"):
+            for element in elements:
+                element.set(**{f"{self.axis}label": text})
+
+    def saveLim(self):
+        elements = [self.element]
+        elements += [element.target for element in main_figure(self.element).selection.targets if
+                     element.target != self.element and isinstance(element.target, Axes)]
+
+        limits = self.input_lim.value()
+        with UndoRedo(elements, f"Set axes {self.axis}-lim"):
+            for element in elements:
+                element.set(**{f"{self.axis}lim": limits})
 
 class QItemProperties(QtWidgets.QWidget):
     targetChanged = QtCore.Signal(object)
     valueChanged = QtCore.Signal(tuple)
     element = None
 
-    def __init__(self, layout: QtWidgets.QLayout, fig: Figure, tree: QtWidgets.QTreeView, parent: QtWidgets.QWidget):
+    def __init__(self, layout: QtWidgets.QLayout, signals: "Signals"):
         """ a widget that holds all the properties to set and the tree view
 
         Args:
@@ -1068,10 +1008,13 @@ class QItemProperties(QtWidgets.QWidget):
         """
         QtWidgets.QWidget.__init__(self)
         layout.addWidget(self)
+        self.signals = signals
+
+        signals.figure_changed.connect(self.setFigure)
+        signals.figure_element_selected.connect(self.select_element)
+
         self.layout = QtWidgets.QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
-        self.tree = tree
-        self.parent = parent
 
         self.label = QtWidgets.QLabel()
         self.layout.addWidget(self.label)
@@ -1169,6 +1112,17 @@ class QItemProperties(QtWidgets.QWidget):
         self.layout_buttons.addWidget(self.button_legend)
         self.button_legend.clicked.connect(self.buttonLegendClicked)
 
+        self.setElement(None)
+        self.setMinimumWidth(100)
+
+    def select_element(self, element: Artist):
+        """ select an element """
+        if element is None:
+            self.setElement(self.fig)
+        else:
+            self.setElement(element)
+
+    def setFigure(self, fig):
         self.fig = fig
 
     def buttonAddImageClicked(self):
@@ -1197,12 +1151,15 @@ class QItemProperties(QtWidgets.QWidget):
         addChange(axes, ".imshow(plt.imread(\"%s\"))" % filename)
         addChange(axes, '.set_xticks([])')
         addChange(axes, '.set_yticks([])')
-        addChange(axes, ".spines['right'].set_visible(False)")
-        addChange(axes, ".spines['left'].set_visible(False)")
-        addChange(axes, ".spines['top'].set_visible(False)")
-        addChange(axes, ".spines['bottom'].set_visible(False)")
+        if 0:
+            addChange(axes, ".spines['right'].set_visible(False)")
+            addChange(axes, ".spines['left'].set_visible(False)")
+            addChange(axes, ".spines['top'].set_visible(False)")
+            addChange(axes, ".spines['bottom'].set_visible(False)")
+        else:
+            addChange(axes, ".spines[:].set_visible(False)")
 
-        self.tree.updateEntry(self.element, update_children=True)
+        self.signals.figure_element_child_created.emit(self.element)
         self.fig.figure_dragger.make_dragable(axes)
         self.fig.figure_dragger.select_element(axes)
         self.fig.canvas.draw()
@@ -1214,15 +1171,17 @@ class QItemProperties(QtWidgets.QWidget):
         """ when the button 'add text' is clicked """
         if isinstance(self.element, Axes):
             text = self.element.text(0.5, 0.5, "New Text", transform=self.element.transAxes)
-            self.fig.change_tracker.addChange(self.element,
-                                              ".text(0.5, 0.5, 'New Text', transform=%s.transAxes)  # id=%s.new" % (
-                                                  getReference(self.element), getReference(text)), text, ".new")
+            text.is_new_text = True
+            add_text_default(text)
+            self.fig.change_tracker.addNewTextChange(text)
+
         if isinstance(self.element, Figure):
             text = self.element.text(0.5, 0.5, "New Text", transform=self.element.transFigure)
-            self.fig.change_tracker.addChange(self.element,
-                                              ".text(0.5, 0.5, 'New Text', transform=%s.transFigure)  # id=%s.new" % (
-                                                  getReference(self.element), getReference(text)), text, ".new")
-        self.tree.updateEntry(self.element, update_children=True)
+            text.is_new_text = True
+            add_text_default(text)
+            self.fig.change_tracker.addNewTextChange(text)
+
+        self.signals.figure_element_child_created.emit(self.element)
         self.fig.figure_dragger.make_dragable(text)
         self.fig.canvas.draw()
         self.fig.figure_dragger.on_deselect(None)
@@ -1243,7 +1202,7 @@ class QItemProperties(QtWidgets.QWidget):
                                           text.xy, text.get_position(), getReference(text)),
                                           text, ".new")
 
-        self.tree.updateEntry(self.element, update_children=True)
+        self.signals.figure_element_child_created.emit(self.element)
         self.fig.figure_dragger.make_dragable(text)
         self.fig.figure_dragger.select_element(text)
         self.fig.canvas.draw()
@@ -1262,7 +1221,7 @@ class QItemProperties(QtWidgets.QWidget):
                                               p.get_xy(), p.get_width(), p.get_height(), getReference(p)),
                                           p, ".new")
 
-        self.tree.updateEntry(self.element, update_children=True)
+        self.signals.figure_element_child_created.emit(self.element)
         self.fig.figure_dragger.make_dragable(p)
         self.fig.figure_dragger.select_element(p)
         self.fig.canvas.draw()
@@ -1283,7 +1242,7 @@ class QItemProperties(QtWidgets.QWidget):
                                           p._posA_posB[0], p._posA_posB[1], getReference(p)),
                                           p, ".new")
 
-        self.tree.updateEntry(self.element, update_children=True)
+        self.signals.figure_element_child_created.emit(self.element)
         self.fig.figure_dragger.make_dragable(p)
         self.fig.figure_dragger.select_element(p)
         self.fig.canvas.draw()
@@ -1293,35 +1252,44 @@ class QItemProperties(QtWidgets.QWidget):
 
     def buttonDespineClicked(self):
         """ despine the target """
-        commands = [".spines['right'].set_visible(False)", ".spines['top'].set_visible(False)"]
-        for command in commands:
-            elements = [element.target for element in self.element.figure.selection.targets
-                        if isinstance(element.target, Axes)]
+
+        elements = [element.target for element in main_figure(self.element).selection.targets if isinstance(element.target, Axes)]
+        def is_despined(elem):
+            return elem.spines['right'].get_visible() and elem.spines['top'].get_visible()
+        despined = [is_despined(elem) for elem in elements]
+        new_value = not is_despined(self.element)
+        fig = main_figure(self.element)
+
+        with UndoRedo(elements, "Despine"):
             for element in elements:
-                eval("element" + command)
-                self.fig.change_tracker.addChange(element, command)
-        self.fig.canvas.draw()
+                for spine in ["right", "top"]:
+                    element.spines[spine].set_visible(new_value)
 
     def buttonGridClicked(self):
         """ toggle the grid of the target """
-        elements = [element.target for element in self.element.figure.selection.targets
+        elements = [element.target for element in main_figure(self.element).selection.targets
                     if isinstance(element.target, Axes)]
+        has_grid = getattr(self.element.xaxis, "_gridOnMajor", False) or getattr(self.element.xaxis, "_major_tick_kw", {"gridOn": False})['gridOn']
 
-        def set_false():
+        with UndoRedo(elements, "Toggle Grid"):
             for element in elements:
-                element.grid(False)
-                self.fig.change_tracker.addChange(element, ".grid(False)")
-        def set_true():
-            for element in elements:
-                element.grid(True)
-                self.fig.change_tracker.addChange(element, ".grid(True)")
+                element.grid(not has_grid)
+        if 0:
+            def set_false():
+                for element in elements:
+                    element.grid(False)
+                    self.fig.change_tracker.addChange(element, ".grid(False)")
+            def set_true():
+                for element in elements:
+                    element.grid(True)
+                    self.fig.change_tracker.addChange(element, ".grid(True)")
 
-        if getattr(self.element.xaxis, "_gridOnMajor", False) or getattr(self.element.xaxis, "_major_tick_kw", {"gridOn": False})['gridOn']:
-            set_false()
-            self.fig.change_tracker.addEdit([set_true, set_false, "Grid off"])
-        else:
-            set_true()
-            self.fig.change_tracker.addEdit([set_false, set_true, "Grid on"])
+            if getattr(self.element.xaxis, "_gridOnMajor", False) or getattr(self.element.xaxis, "_major_tick_kw", {"gridOn": False})['gridOn']:
+                set_false()
+                self.fig.change_tracker.addEdit([set_true, set_false, "Grid off"])
+            else:
+                set_true()
+                self.fig.change_tracker.addEdit([set_false, set_true, "Grid on"])
         self.fig.canvas.draw()
 
     def buttonLegendClicked(self):
@@ -1330,7 +1298,7 @@ class QItemProperties(QtWidgets.QWidget):
         self.fig.change_tracker.addChange(self.element, ".legend()")
         self.fig.figure_dragger.make_dragable(self.element.get_legend())
         self.fig.canvas.draw()
-        self.tree.updateEntry(self.element, update_children=True)
+        self.signals.figure_element_child_created.emit(self.element)
 
     def changePickable(self):
         """ make the target pickable """
@@ -1338,7 +1306,7 @@ class QItemProperties(QtWidgets.QWidget):
             self.element._draggable.connect()
         else:
             self.element._draggable.disconnect()
-        self.tree.updateEntry(self.element)
+        self.signals.figure_element_child_created.emit(self.element)
 
     def setElement(self, element: Artist):
         """ set the target Artist of this widget """
@@ -1379,7 +1347,7 @@ class QItemProperties(QtWidgets.QWidget):
         try:
             self.input_font_properties.show()
             elements = [element]
-            elements += [element.target for element in element.figure.selection.targets if
+            elements += [element.target for element in main_figure(element).selection.targets if
                          element.target != element]
             self.input_font_properties.setTarget(elements)
         except AttributeError:
@@ -1388,89 +1356,3 @@ class QItemProperties(QtWidgets.QWidget):
         self.targetChanged.emit(element)
 
 
-class ToolBar(QtWidgets.QToolBar):
-
-    def __init__(self, canvas: Canvas, figure: Figure):
-        """ A widget that displays a toolbar similar to the default Matplotlib toolbar (for the zoom and pan tool)
-
-        Args:
-            canvas: the canvas of the figure
-            figure: the figure
-        """
-        super().__init__()
-        self.canvas = canvas
-        self.fig = figure
-        self.navi_toolbar = NavigationToolbar(self.canvas, self)
-        self.navi_toolbar.hide()
-
-        self._actions = self.navi_toolbar._actions
-        self._actions["home"] = self.addAction(self.navi_toolbar._icon("home.png"), "", self.navi_toolbar.home)
-
-        self._actions["back"] = self.addAction(self.navi_toolbar._icon("back.png"), "", self.navi_toolbar.back)
-
-        self._actions["forward"] = self.addAction(self.navi_toolbar._icon("forward.png"), "", self.navi_toolbar.forward)
-        self.addSeparator()
-
-        # the action group makes the actions exclusive, you
-        # can't use 2 at the same time
-        action_group = QtWidgets.QActionGroup(self)
-
-        self._actions["drag"] = self.addAction(self.icon("arrow.png"), "", self.setSelect)
-        self._actions["drag"].setCheckable(True)
-        self._actions["drag"].setActionGroup(action_group)
-
-        self._actions["pan"] = self.addAction(self.navi_toolbar._icon("move.png"), "", self.setPan)
-        self._actions["pan"].setCheckable(True)
-        self._actions["pan"].setActionGroup(action_group)
-
-        self._actions["zoom"] = self.addAction(self.navi_toolbar._icon("zoom_to_rect.png"), "", self.setZoom)
-        self._actions["zoom"].setCheckable(True)
-        self._actions["zoom"].setActionGroup(action_group)
-
-        self.navi_toolbar._active = 'DRAG'
-        self._actions['drag'].setChecked(True)
-        self.prev_active = 'DRAG'
-
-    def icon(self, name: str):
-        """ get an icon with the given filename """
-        pm = QtGui.QPixmap(os.path.join(os.path.dirname(__file__), "icons", name))
-        if hasattr(pm, 'setDevicePixelRatio'):
-            try:  # older mpl < 3.5.0
-                pm.setDevicePixelRatio(self.canvas._dpi_ratio)
-            except AttributeError:
-                pm.setDevicePixelRatio(self.canvas.device_pixel_ratio)
-
-        return QtGui.QIcon(pm)
-
-    def setSelect(self):
-        """ select the pylustrator selection and drag tool """
-        self.fig.figure_dragger.activate()
-
-        if self.prev_active=="PAN":
-            self.navi_toolbar.pan()
-        elif self.prev_active=="ZOOM":
-            self.navi_toolbar.zoom()
-
-        self.prev_active = 'DRAG'
-
-        self.navi_toolbar._active = 'DRAG'
-
-    def setPan(self):
-        """ select the mpl pan tool """
-        if self.prev_active == "DRAG":
-            self.fig.figure_dragger.deactivate()
-
-        if self.navi_toolbar._active != 'PAN':
-            self.navi_toolbar.pan()
-
-        self.prev_active = 'PAN'
-
-    def setZoom(self):
-        """ select the mpl zoom tool """
-        if self.prev_active == "DRAG":
-            self.fig.figure_dragger.deactivate()
-
-        if self.navi_toolbar._active != 'ZOOM':
-            self.navi_toolbar.zoom()
-
-        self.prev_active = 'ZOOM'

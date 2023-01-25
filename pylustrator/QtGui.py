@@ -19,19 +19,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Pylustrator. If not, see <http://www.gnu.org/licenses/>
 
-from qtpy import QtCore, QtWidgets, QtGui
-import qtawesome as qta
+from matplotlib.backends.qt_compat import QtCore, QtGui, QtWidgets
 
 import numpy as np
 import matplotlib.pyplot as plt
-from qtpy import API_NAME as QT_API_NAME
-if QT_API_NAME.startswith("PyQt4"):
-    from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as Canvas
-    from matplotlib.backends.backend_qt4 import NavigationToolbar2QT as NavigationToolbar
-else:
-    from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as Canvas
-    from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
-from .matplotlibwidget import MatplotlibWidget
+from matplotlib.backends.backend_qtagg import (FigureCanvas, FigureManager, NavigationToolbar2QT as NavigationToolbar)
+from pylustrator.components.matplotlibwidget import MatplotlibWidget
 from matplotlib import _pylab_helpers
 from matplotlib.figure import Figure
 from matplotlib.artist import Artist
@@ -137,6 +130,11 @@ def addChildren(color_artists: list, parent: Artist):
                 except AttributeError:
                     cmap = None
 
+                try:
+                    mpl.colors.to_hex(color)
+                except ValueError:
+                    continue
+
                 # omit blacks and whites
                 if mpl.colors.to_hex(color) == "#000000" or mpl.colors.to_hex(color) == "#ffffff":
                     continue
@@ -224,7 +222,7 @@ def figureSwapColor(figure: Figure, new_color: str, color_base: str):
 class ColorChooserWidget(QtWidgets.QWidget):
     trigger_no_update = False
 
-    def __init__(self, parent: QtWidgets, canvas: Canvas):
+    def __init__(self, parent: QtWidgets, canvas: FigureCanvas, signals: "Signals"=None):
         """ A widget to display all curently used colors and let the user switch them.
 
         Args:
@@ -236,13 +234,13 @@ class ColorChooserWidget(QtWidgets.QWidget):
         # initialize color artist dict
         self.color_artists = {}
         # tracks how many colors have changed to make sure
-        # that updateColors is only called after a
+        # that updateColorsText is only called after a
         # full swap this means 2 colors change
         self.swap_counter = 0
 
         # add update push button
         self.button_update = QtWidgets.QPushButton(qta.icon("ei.refresh"), "update")
-        self.button_update.clicked.connect(self.updateColors)
+        self.button_update.clicked.connect(self.updateColorsText)
 
         # add color chooser layout
         self.layout_right = QtWidgets.QVBoxLayout(self)
@@ -264,17 +262,27 @@ class ColorChooserWidget(QtWidgets.QWidget):
         self.layout_buttons.addWidget(self.button_load)
 
         self.canvas = canvas
+        #self.updateColors()
 
         # add a text widget to allow easy copy and paste
         self.colors_text_widget = QtWidgets.QTextEdit()
         self.colors_text_widget.setAcceptRichText(False)
         self.layout_colors2.addWidget(self.colors_text_widget)
-        self.colors_text_widget.textChanged.connect(self.colors_changed)
+        self.colors_text_widget.textChanged.connect(self.colorsTextChanged)
+
+        if signals:
+            signals.canvas_changed.connect(self.setCanvas)
+
+    def setCanvas(self, canvas):
+        self.canvas = canvas
 
     def saveColors(self):
         """ save the colors to a .txt file """
-        path = QtWidgets.QFileDialog.getSaveFileName(self, "Save Color File", getattr(self, "last_save_folder", None),
-                                                     "Text File *.txt")
+        options = QtWidgets.QFileDialog.Options()
+        #  options |= QtWidgets.QFileDialog.DontUseNativeDialog
+
+        path = QtWidgets.QFileDialog.getSaveFileName(self, "Save Color File", getattr(self, "last_save_folder", None),"Text Files (*.txt);;All Files (*)", options=options)
+
         if isinstance(path, tuple):
             path = str(path[0])
         else:
@@ -287,14 +295,18 @@ class ColorChooserWidget(QtWidgets.QWidget):
 
     def loadColors(self):
         """ load a list of colors from a .txt file """
-        path = QtWidgets.QFileDialog.getOpenFileName(self, "Open Color File", getattr(self, "last_save_folder", None),
-                                                     "Text File *.txt")
+        options = QtWidgets.QFileDialog.Options()
+        #  options |= QtWidgets.QFileDialog.DontUseNativeDialog
+
+        path = QtWidgets.QFileDialog.getOpenFileName(self, "Open Color File", getattr(self, "last_save_folder", None), "Text File (*.txt);;All Files (*)", options=options)
         if isinstance(path, tuple):
             path = str(path[0])
         else:
             path = str(path)
+        # if path is empty
         if not path:
             return
+
         self.last_save_folder = path
         with open(path, "r") as fp:
             self.colors_text_widget.setText(fp.read())
@@ -314,22 +326,23 @@ class ColorChooserWidget(QtWidgets.QWidget):
 
     def colorChanged(self, c, color_base):
         """ update a color when it is changed
-        if colors are swapped then first change both colors  and then update the text list of colors
+        if colors are swapped then first change both colors
+        and then update the text list of colors
         """
         self.color_selected(c, color_base)
 
-        # call updateColors after 2 colors have swapped
+        # call updateColorsText after 2 colors have swapped
         self.swap_counter += 1
         if self.swap_counter == 2:
             self.swap_counter = 0
-            self.updateColors()
+            self.updateColorsText()
 
     def resetSwapcounter(self, _):
         """ when a color changed using the color picker the swap counter is reset """
         self.swap_counter = 0
-        self.updateColors()
+        self.updateColorsText()
 
-    def updateColors(self):
+    def updateColorsText(self):
         """ update the text list of colors """
         # add recursively all artists of the figure
         figureListColors(self.canvas.figure)
@@ -339,13 +352,7 @@ class ColorChooserWidget(QtWidgets.QWidget):
         self.color_buttons = {}
         self.color_buttons_list = []
 
-        while self.layout_colors.takeAt(0):
-            pass
-
-        # for color_button in self.color_buttons_list:
-        #    color_button.deleteLater()
-        #    color_button.set
-        self.color_buttons_list = []
+        self.removeColoredButtons()
 
         for color in self.color_artists[:20]:
             self.addColorButton(color, color)
@@ -365,11 +372,15 @@ class ColorChooserWidget(QtWidgets.QWidget):
         # update the canvas dimensions
         self.canvas.updateGeometry()
 
-    def colors_changed(self):
-        """ when the colors changed """
+    def colorsTextChanged(self):
+        """ when the colors in the text widget changed
+        after loading new colors or manually editing the text field
+        """
         if self.trigger_no_update:
             return
+
         maps = plt.colormaps()
+
         # when the colors in the text edit changed
         for index, color in enumerate(self.colors_text_widget.toPlainText().split("\n")):
             try:
@@ -388,6 +399,11 @@ class ColorChooserWidget(QtWidgets.QWidget):
         figureSwapColor(self.canvas.figure, new_color, color_base)
         # redraw the plot
         self.canvas.draw()
+
+    def removeColoredButtons(self):
+        while self.layout_colors.takeAt(0):
+            pass
+        self.color_buttons_list = []
 
 
 class PlotWindow(QtWidgets.QWidget):
@@ -420,4 +436,4 @@ class PlotWindow(QtWidgets.QWidget):
 
     def showEvent(self, a0: QtGui.QShowEvent):
         # update the colors
-        self.colorWidget.updateColors()
+        self.colorWidget.updateColorsText()

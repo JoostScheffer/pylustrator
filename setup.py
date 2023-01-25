@@ -27,21 +27,19 @@ this_directory = Path(__file__).parent
 long_description = (this_directory / "README.md").read_text()
 
 setup(name='pylustrator',
-      version="1.1.2",
+      version="1.2.1",
       description='Adds interactivity to arrange panels in matplotlib',
       long_description=long_description,
       url='https://github.com/rgerum/pylustrator',
       license="GPLv3",
       author='Richard Gerum',
       author_email='richard.gerum@fau.de',
-      packages=['pylustrator'],
+      packages=['pylustrator', 'pylustrator.components'],
       include_package_data=True,
       install_requires=[
           'natsort',
           'numpy',
           'matplotlib',
-          'pyqt5',
-          'qtpy',
           'qtawesome',
           'scikit-image'
       ],

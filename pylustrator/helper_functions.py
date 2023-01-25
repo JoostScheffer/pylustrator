@@ -569,6 +569,8 @@ def axes_to_grid(axes=None, track_changes=False):
     if axes is None:
         fig = plt.gcf()
         axes = fig.axes
+    if len(axes) == 0:
+        return
 
     # get width and heights
     width = np.mean([ax.get_position().width for ax in axes])
@@ -590,7 +592,6 @@ def axes_to_grid(axes=None, track_changes=False):
                 new_indices[i] = np.argmin(d)
         axes_indices.append(new_indices)
     # sort the indices
-    pos = np.array(pos)
     for i in [0, 1]:
         sorted_indices = np.argsort(pos[i], axis=0)
         for indices in axes_indices:
@@ -653,3 +654,12 @@ def axes_to_grid(axes=None, track_changes=False):
         if track_changes is True:
             ax.figure.change_tracker.addChange(ax, ".spines['right'].set_visible(False)")
             ax.figure.change_tracker.addChange(ax, ".spines['top'].set_visible(False)")
+
+
+def main_figure(artist):
+    if artist is None:
+        return None
+    if artist.figure == artist:
+        return artist
+    else:
+        return main_figure(artist.figure)

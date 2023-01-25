@@ -20,6 +20,8 @@
 # along with Pylustrator. If not, see <http://www.gnu.org/licenses/>
 
 from typing import List, Tuple, Optional
+from packaging import version
+from matplotlib.backends.qt_compat import QtCore, QtGui, QtWidgets
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,6 +32,12 @@ from matplotlib.legend import Legend
 from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle, Ellipse, FancyArrowPatch
 from matplotlib.text import Text
+try:
+    from matplotlib.figure import SubFigure  # since matplotlib 3.4.0
+except ImportError:
+    SubFigure = None
+from .helper_functions import main_figure
+
 
 DIR_X0 = 1
 DIR_Y0 = 2
@@ -51,6 +59,25 @@ def checkYLabel(target: Artist):
             return axes
 
 
+def cache_property(object, name):
+    if getattr(object, f"_pylustrator_cached_{name}", False) is True:
+        return
+    setattr(object, f"_pylustrator_cached_{name}", True)
+    getter = getattr(object, f"get_{name}")
+    setter = getattr(object, f"set_{name}")
+    def new_getter(*args, **kwargs):
+        if getattr(object, f"_pylustrator_cache_{name}", None) is None:
+            setattr(object, f"_pylustrator_cache_{name}", getter(*args, **kwargs))
+        return getattr(object, f"_pylustrator_cache_{name}", None)
+    def new_setter(*args, **kwargs):
+        result = setter(*args, **kwargs)
+        setattr(object, f"_pylustrator_cache_{name}", None)
+        return result
+    setattr(object, f"get_{name}", new_getter)
+    setattr(object, f"set_{name}", new_setter)
+
+
+
 class TargetWrapper(object):
     """ a wrapper to add unified set and get position methods for any matplotlib artist """
     target = None
@@ -68,7 +95,14 @@ class TargetWrapper(object):
             # and optionally have a fixed aspect ratio
             if self.target.get_aspect() != "auto" and self.target.get_adjustable() != "datalim":
                 self.fixed_aspect = True
-            self.get_transform = lambda: self.target.figure.transSubfigure if self.target.figure.transSubfigure else self.target.figure.transFigure
+            # old matplotlib version
+            if version.parse(mpl.__version__) < version.parse("3.4.0"):
+                self.get_transform = lambda: self.target.figure.transFigure
+            else:
+                self.get_transform = lambda: self.target.figure.transSubfigure if self.target.figure.transSubfigure else self.target.figure.transFigure
+
+            # cache the get_position
+            cache_property(self.target, "position")
         # texts use get_transform
         elif isinstance(self.target, Text):
             if getattr(self.target, "xy", None) is not None:
@@ -93,7 +127,7 @@ class TargetWrapper(object):
             self.get_transform = self.target.get_transform
             self.do_scale = False
 
-    def get_positions(self) -> (int, int, int, int):
+    def get_positions(self, use_previous_offset=False, update_offset=False) -> (int, int, int, int):
         """ get the current position of the target Artist """
         points = []
         if isinstance(self.target, Rectangle):
@@ -124,8 +158,19 @@ class TargetWrapper(object):
                 points.append(
                     bbox.get_transform().transform((bbox.get_x() + bbox.get_width(), bbox.get_y() + bbox.get_height())))
             points[-2:] = self.transform_inverted_points(points[-2:])
+            if use_previous_offset is True:
+                points[2] = points[0] + self.target._pylustrator_offset + points[2] - points[1]
+                points[1] = points[0] + self.target._pylustrator_offset
+            else:
+                if getattr(self.target, "_pylustrator_offset", None) is None or update_offset:
+                    self.target._pylustrator_offset = points[1] - points[0]
         elif isinstance(self.target, Axes):
             p1, p2 = np.array(self.target.get_position())
+            points.append(p1)
+            points.append(p2)
+        elif isinstance(self.target, SubFigure):
+            p1 = [self.target.bbox.x0, self.target.bbox.y0]
+            p2 = [self.target.bbox.x1, self.target.bbox.y1]
             points.append(p1)
             points.append(p2)
         elif isinstance(self.target, Legend):
@@ -137,36 +182,47 @@ class TargetWrapper(object):
             # add points to span bounding box around the frame
             points.append([bbox.x0, bbox.y0])
             points.append([bbox.x1, bbox.y1])
+            if use_previous_offset is True:
+                points[2] = points[0] + self.target._pylustrator_offset + points[2] - points[1]
+                points[1] = points[0] + self.target._pylustrator_offset
+            else:
+                if getattr(self.target, "_pylustrator_offset", None) is None or update_offset:
+                    self.target._pylustrator_offset = points[1] - points[0]
         return self.transform_points(points)
 
     def set_positions(self, points: (int, int)):
         """ set the position of the target Artist """
         points = self.transform_inverted_points(points)
 
+        if self.figure.figure is not None:
+            change_tracker = self.figure.figure.change_tracker
+        else:
+            change_tracker = self.figure.change_tracker
+
         if isinstance(self.target, Rectangle):
             self.target.set_xy(points[0])
             self.target.set_width(points[1][0] - points[0][0])
             self.target.set_height(points[1][1] - points[0][1])
             if self.target.get_label() is None or not self.target.get_label().startswith("_rect"):
-                self.figure.figure.change_tracker.addChange(self.target, ".set_xy([%f, %f])" % tuple(self.target.get_xy()))
-                self.figure.figure.change_tracker.addChange(self.target, ".set_width(%f)" % self.target.get_width())
-                self.figure.figure.change_tracker.addChange(self.target, ".set_height(%f)" % self.target.get_height())
+                change_tracker.addChange(self.target, ".set_xy([%f, %f])" % tuple(self.target.get_xy()))
+                change_tracker.addChange(self.target, ".set_width(%f)" % self.target.get_width())
+                change_tracker.addChange(self.target, ".set_height(%f)" % self.target.get_height())
         elif isinstance(self.target, Ellipse):
             self.target.center = np.mean(points, axis=0)
             self.target.width = points[1][0] - points[0][0]
             self.target.height = points[1][1] - points[0][1]
-            self.figure.figure.change_tracker.addChange(self.target, ".center = (%f, %f)" % tuple(self.target.center))
-            self.figure.figure.change_tracker.addChange(self.target, ".width = %f" % self.target.width)
-            self.figure.figure.change_tracker.addChange(self.target, ".height = %f" % self.target.height)
+            change_tracker.addChange(self.target, ".center = (%f, %f)" % tuple(self.target.center))
+            change_tracker.addChange(self.target, ".width = %f" % self.target.width)
+            change_tracker.addChange(self.target, ".height = %f" % self.target.height)
         elif isinstance(self.target, FancyArrowPatch):
             self.target.set_positions(points[0], points[1])
-            self.figure.figure.change_tracker.addChange(self.target,
+            change_tracker.addChange(self.target,
                                                  ".set_positions(%s, %s)" % (tuple(points[0]), tuple(points[1])))
         elif isinstance(self.target, Text):
             if checkXLabel(self.target):
                 axes = checkXLabel(self.target)
                 axes.xaxis.labelpad = -(points[0][1] - self.target.pad_offset) / self.label_factor
-                self.figure.figure.change_tracker.addChange(axes,
+                change_tracker.addChange(axes,
                                                      ".xaxis.labelpad = %f" % axes.xaxis.labelpad)
 
                 self.target.set_position(points[0])
@@ -174,32 +230,46 @@ class TargetWrapper(object):
             elif checkYLabel(self.target):
                 axes = checkYLabel(self.target)
                 axes.yaxis.labelpad = -(points[0][0] - self.target.pad_offset) / self.label_factor
-                self.figure.figure.change_tracker.addChange(axes,
+                change_tracker.addChange(axes,
                                                      ".yaxis.labelpad = %f" % axes.yaxis.labelpad)
 
                 self.target.set_position(points[0])
                 self.label_x = points[0][0]
             else:
                 self.target.set_position(points[0])
-                self.figure.figure.change_tracker.addChange(self.target,
+                if isinstance(self.target, Text):
+                    change_tracker.addNewTextChange(self.target)
+                else:
+                    change_tracker.addChange(self.target,
                                                      ".set_position([%f, %f])" % self.target.get_position())
                 if getattr(self.target, "xy", None) is not None:
                     self.target.xy = points[1]
-                    self.figure.figure.change_tracker.addChange(self.target, ".xy = (%f, %f)" % tuple(self.target.xy))
+                    change_tracker.addChange(self.target, ".xy = (%f, %f)" % tuple(self.target.xy))
         elif isinstance(self.target, Legend):
             point = self.target.axes.transAxes.inverted().transform(self.transform_inverted_points(points)[0])
             self.target._loc = tuple(point)
-            self.figure.figure.change_tracker.addChange(self.target, "._set_loc((%f, %f))" % tuple(point))
+            change_tracker.addNewLegendChange(self.target)
+            #change_tracker.addChange(self.target, "._set_loc((%f, %f))" % tuple(point))
         elif isinstance(self.target, Axes):
             position = np.array([points[0], points[1] - points[0]]).flatten()
             if self.fixed_aspect:
                 position[3] = position[2] * self.target.get_position().height / self.target.get_position().width
             self.target.set_position(position)
-            self.figure.figure.change_tracker.addChange(self.target, ".set_position([%f, %f, %f, %f])" % tuple(
-                np.array([points[0], points[1] - points[0]]).flatten()))
+            change_tracker.addNewAxesChange(self.target)
+            #change_tracker.addChange(self.target, ".set_position([%f, %f, %f, %f])" % tuple(
+            #    np.array([points[0], points[1] - points[0]]).flatten()))
+        setattr(self.target, "_pylustrator_cached_get_extend", None)
 
-    def get_extent(self) -> (int, int, int, int):
-        """ get the extend of the target """
+    def get_extent(self):
+        # get get_extent as it can be called very frequently when checking snap conditions
+        if getattr(self.target, "_pylustrator_cached_get_extend_added", False):
+            setattr(self.target, "_pylustrator_cached_get_extend_added", True)
+        if getattr(self.target, "_pylustrator_cached_get_extend", None) is None:
+            setattr(self.target, "_pylustrator_cached_get_extend", self.do_get_extent())
+        return getattr(self.target, "_pylustrator_cached_get_extend")
+
+    def do_get_extent(self) -> (int, int, int, int):
+        """ get the extent of the target """
         points = np.array(self.get_positions())
         return [np.min(points[:, 0]),
                 np.min(points[:, 1]),
@@ -217,8 +287,9 @@ class TargetWrapper(object):
         return [transform.inverted().transform(p) for p in points]
 
 
-class SnapBase(Line2D):
+class SnapBase():
     """ The base class to implement snaps. """
+    data = None
 
     def __init__(self, ax_source: Artist, ax_target: Artist, edge: int):
         # wrap both object with a TargetWrapper
@@ -226,9 +297,12 @@ class SnapBase(Line2D):
         self.ax_target = TargetWrapper(ax_target)
         self.edge = edge
         # initialize a line object for the visualisation of the snap
-        Line2D.__init__(self, [], [], transform=None, clip_on=False, lw=1, zorder=100, linestyle="dashed",
-                        color="r", marker="o", ms=1, label="_tmp_snap")
-        plt.gca().add_artist(self)
+        self.draw_path = QtWidgets.QGraphicsPathItem()
+        parent = main_figure(ax_source)._pyl_graphics_scene_snapparent
+        parent.scene().addItem(self.draw_path)
+        pen1 = QtGui.QPen(QtGui.QColor("red"), 2)
+        pen1.setStyle(QtCore.Qt.DashLine)
+        self.draw_path.setPen(pen1)
 
     def getPosition(self, target: TargetWrapper):
         """ get the position of a target """
@@ -261,6 +335,30 @@ class SnapBase(Line2D):
         """ Implements a visualisation of the snap, e.g. lines to indicate what objects are snapped to what """
         pass
 
+    def set_data(self, xdata, ydata):
+        painter_path = QtGui.QPainterPath()
+        move = True
+        current_pos = (0, 0)
+        for x, y in zip(xdata, ydata):
+            if np.isnan(x):
+                move = True
+                continue
+            y = self.ax_target.figure.canvas.height() - y
+            if move is True:
+                painter_path.moveTo(x, y)
+                current_pos = (x, y)
+                move = False
+            else:
+                if current_pos[0] > x:
+                    painter_path.moveTo(x, y)
+                    painter_path.lineTo(*current_pos)
+                    current_pos = (x, y)
+                else:
+                    painter_path.lineTo(x, y)
+                    current_pos = (x, y)
+        self.draw_path.setPath(painter_path)
+        self.data = (xdata, ydata)
+
     def hide(self):
         """ Hides the visualisation """
         self.set_data((), ())
@@ -269,7 +367,7 @@ class SnapBase(Line2D):
         """ Remove the snap and its visualisation """
         self.hide()
         try:
-            self.axes.artists.remove(self)
+            self.draw_path.scene().removeItem(self.draw_path)
         except ValueError:
             pass
 
@@ -439,7 +537,7 @@ class SnapSameBorder(SnapBase):
         x2, y2 = self.getConnection(p2, p3, self.dir2)
         x1.extend(x2)
         y1.extend(y2)
-        self.set_data((x1, y1))
+        self.set_data(x1, y1)
 
 
 class SnapCenterWith(SnapBase):
