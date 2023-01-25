@@ -22,6 +22,7 @@
 from __future__ import division
 import matplotlib.pyplot as plt
 from matplotlib.text import Text
+import matplotlib as mpl
 import numpy as np
 import traceback
 from .parse_svg import svgread
@@ -653,3 +654,28 @@ def axes_to_grid(axes=None, track_changes=False):
         if track_changes is True:
             ax.figure.change_tracker.addChange(ax, ".spines['right'].set_visible(False)")
             ax.figure.change_tracker.addChange(ax, ".spines['top'].set_visible(False)")
+
+def make_into_color(color_input: str) -> str:
+    """ 
+    Appempts to convert color_input into hex, otherwise return placeholder color
+
+    In some cases the user inputs an incomplete color that is not recognized by
+    matplotlib.colors.to_hex(). To still give the user feedback a placeholder colors
+    can be generated.
+    """
+    try:
+        color = mpl.colors.to_hex(color_input)
+    except ValueError:
+        # if it seems valid fill in the rest of the letters with 0's else replace it with a constant
+        if color_input[0] == "#" and color_input[1:].isalpha():
+            if len(color_input) < 4:
+                placeholder_color = color_input + (4 - len(color_input)) * '0'
+            elif len(color_input) < 7:
+                placeholder_color = color_input + (7 - len(color_input)) * '0'
+        else:
+            placeholder_color = "#aaaaff"
+
+        print(f"{color} is not a valid color and will be replaced by {placeholder_color}")
+        color = placeholder_color
+
+    return color

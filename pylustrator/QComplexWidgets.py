@@ -476,6 +476,8 @@ class LegendPropertiesWidget(QtWidgets.QWidget):
                     widget.setSingleStep(0.1)
                 elif type_ == int:
                     widget = QtWidgets.QSpinBox()
+                    if name2 == '_ncol':
+                        widget.setMinimum(1)
                 layout.addWidget(widget)
                 widget.valueChanged.connect(lambda x, name=name: self.changePropertiy(name, x))
             self.widgets[name] = widget

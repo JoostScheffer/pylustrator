@@ -36,7 +36,7 @@ from matplotlib import _pylab_helpers
 from matplotlib.figure import Figure
 from matplotlib.artist import Artist
 import matplotlib as mpl
-import qtawesome as qta
+from .helper_functions import make_into_color
 
 from .QtShortCuts import QDragableColor
 
@@ -308,10 +308,7 @@ class ColorChooserWidget(QtWidgets.QWidget):
 
     def addColorButton(self, color: str, basecolor: str = None):
         """ add a button for the given color """
-        try:
-            button = QDragableColor(mpl.colors.to_hex(color))
-        except ValueError:
-            button = QDragableColor(color)
+        button = QDragableColor(make_into_color(color))
         self.layout_colors.addWidget(button)
         button.color_changed.connect(lambda c: self.colorChanged(c, color_base=basecolor))
         button.color_changed_by_color_picker.connect(lambda e: self.resetSwapcounter(e))
@@ -353,16 +350,8 @@ class ColorChooserWidget(QtWidgets.QWidget):
             self.addColorButton(color, color)
 
         self.trigger_no_update = True
-        try:
-            def colorToText(color):
-                try:
-                    return mpl.colors.to_hex(color)
-                except ValueError:
-                    return color
-
-            self.colors_text_widget.setText("\n".join([colorToText(color) for color in self.color_artists[:10]]))
-        finally:
-            self.trigger_no_update = False
+        self.colors_text_widget.setText("\n".join([make_into_color(color) for color in self.color_artists[:10]]))
+        self.trigger_no_update = False
 
         # update the canvas dimensions
         self.canvas.updateGeometry()
